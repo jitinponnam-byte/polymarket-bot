@@ -7,6 +7,7 @@ from datetime import datetime
 
 client = PolymarketUS()
 
+# Markets to watch
 SEARCH_WORDS = [
     "nba",
     "nhl",
@@ -21,6 +22,7 @@ SEARCH_WORDS = [
 CHECK_SECONDS = 60
 PRICE_MOVE_ALERT = 2.0
 
+# Paper trading only — this does NOT use real money
 PAPER_TRADING = True
 FAKE_BUY_PRICE_LIMIT = 0.35
 FAKE_TRADE_AMOUNT = 10.00
@@ -95,6 +97,7 @@ def log_trade(timestamp, action, question, slug, outcome, buy_price, current_pri
 
 
 setup_csv_files()
+print("CSV logging enabled: price_log.csv and paper_trades.csv")
 
 try:
     while True:
@@ -119,9 +122,12 @@ try:
             market_type = market.get("marketType", "")
             market_text = f"{question} {slug}".lower()
 
+            # Only check markets matching our search words
             if not any(word.lower() in market_text for word in SEARCH_WORDS):
                 continue
 
+            # Only focus on game winner markets
+            # This skips long-term futures like "NBA Champion"
             if market_type != "moneyline":
                 continue
 
@@ -155,6 +161,7 @@ try:
 
                 print(f"{outcome}: {probability:.1f}%")
 
+                # Save every price check to CSV
                 log_price(
                     timestamp,
                     question,
@@ -165,6 +172,7 @@ try:
                     probability
                 )
 
+                # Alert if price moved enough
                 if old_probability is not None:
                     change = probability - old_probability
 
@@ -174,6 +182,9 @@ try:
 
                 last_prices[key] = probability
 
+                # PAPER TRADE RULE:
+                # Fake buy any outcome when price is below 35%
+                # This does NOT place a real order.
                 if PAPER_TRADING and price_float <= FAKE_BUY_PRICE_LIMIT:
                     if key not in paper_positions:
                         shares = FAKE_TRADE_AMOUNT / price_float
@@ -204,6 +215,7 @@ try:
                             0.00
                         )
 
+                # Show fake profit/loss if we have a paper position
                 if key in paper_positions:
                     position = paper_positions[key]
                     buy_price = position["buy_price"]
