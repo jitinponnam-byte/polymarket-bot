@@ -24,7 +24,7 @@ PRICE_MOVE_ALERT = 2.0
 
 # Paper trading only — this does NOT use real money
 PAPER_TRADING = True
-FAKE_BUY_PRICE_LIMIT = 0.35
+FAKE_BUY_PRICE_LIMIT = 0.50
 FAKE_TRADE_AMOUNT = 10.00
 
 PRICE_LOG_FILE = "price_log.csv"
