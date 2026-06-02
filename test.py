@@ -9,24 +9,41 @@ from datetime import datetime
 client = PolymarketUS()
 
 SEARCH_WORDS = [
-    "nba",
-    "nhl",
-    "tennis",
-    "atp",
-    "wta",
-    "valorant",
-    "vct",
-    "counter-strike",
-    "cs2",
-    "csgo",
-    "league of legends",
-    "lol",
-    "dota",
-    "dota 2",
-    "call of duty",
-    "cod",
+    "nba", "nhl",
+    "tennis", "atp", "wta",
+    "valorant", "vct",
+    "counter-strike", "cs2", "csgo",
+    "league of legends", "lol",
+    "dota", "dota 2",
+    "call of duty", "cod",
     "overwatch",
-    "rocket league"
+    "rocket league",
+    "fifa", "world cup", "soccer"
+]
+
+BLOCK_WORDS = [
+    "mvp",
+    "champion",
+    "championship",
+    "winner",
+    "rookie of the year",
+    "hart",
+    "stanley cup",
+    "finals mvp",
+    "season",
+    "trophy",
+    "award",
+    "league winner",
+    "conference winner",
+    "division winner"
+]
+
+ALLOW_GAME_WORDS = [
+    " vs ",
+    " against ",
+    "match",
+    "game",
+    "scheduled for"
 ]
 
 CHECK_SECONDS = 60
@@ -56,28 +73,16 @@ def setup_csv_files():
         with open(PRICE_LOG_FILE, "w", newline="") as file:
             writer = csv.writer(file)
             writer.writerow([
-                "timestamp",
-                "question",
-                "slug",
-                "market_type",
-                "outcome",
-                "price",
-                "probability_percent"
+                "timestamp", "question", "slug", "market_type",
+                "outcome", "price", "probability_percent"
             ])
 
     if not os.path.exists(TRADE_LOG_FILE):
         with open(TRADE_LOG_FILE, "w", newline="") as file:
             writer = csv.writer(file)
             writer.writerow([
-                "timestamp",
-                "action",
-                "question",
-                "slug",
-                "outcome",
-                "buy_price",
-                "current_price",
-                "shares",
-                "amount",
+                "timestamp", "action", "question", "slug", "outcome",
+                "buy_price", "current_price", "shares", "amount",
                 "paper_profit_loss"
             ])
 
@@ -86,13 +91,8 @@ def log_price(timestamp, question, slug, market_type, outcome, price_float, prob
     with open(PRICE_LOG_FILE, "a", newline="") as file:
         writer = csv.writer(file)
         writer.writerow([
-            timestamp,
-            question,
-            slug,
-            market_type,
-            outcome,
-            price_float,
-            probability
+            timestamp, question, slug, market_type,
+            outcome, price_float, probability
         ])
 
 
@@ -100,16 +100,8 @@ def log_trade(timestamp, action, question, slug, outcome, buy_price, current_pri
     with open(TRADE_LOG_FILE, "a", newline="") as file:
         writer = csv.writer(file)
         writer.writerow([
-            timestamp,
-            action,
-            question,
-            slug,
-            outcome,
-            buy_price,
-            current_price,
-            shares,
-            amount,
-            profit_loss
+            timestamp, action, question, slug, outcome,
+            buy_price, current_price, shares, amount, profit_loss
         ])
 
 
@@ -131,13 +123,23 @@ def get_underdog(outcomes, prices):
     return min(valid, key=lambda x: x[1])
 
 
+def is_fast_game_market(market_text):
+    if any(word in market_text for word in BLOCK_WORDS):
+        return False
+
+    if not any(word in market_text for word in ALLOW_GAME_WORDS):
+        return False
+
+    return True
+
+
 setup_csv_files()
 
 print("CSV logging enabled.")
-print("Watching NBA, NHL, Tennis, and Esports.")
+print("Watching NBA, NHL, Tennis, Esports, FIFA, and soccer.")
 print("Paper trading only.")
 print("Rules: max 10 positions, $2-$3 each, underdog only, cash out in profit, no re-entry.")
-print("Updated: moneyline-only filter removed. Bot now accepts any 2-outcome matching market.")
+print("Updated: filters out futures/long-term markets and focuses on same-day style games/matches.")
 
 try:
     while True:
@@ -157,6 +159,8 @@ try:
 
         total_markets_seen = len(markets)
         keyword_matches = 0
+        blocked_long_term = 0
+        game_style_matches = 0
         two_outcome_matches = 0
         found = 0
 
@@ -171,6 +175,19 @@ try:
 
             keyword_matches += 1
 
+            if any(word in market_text for word in BLOCK_WORDS):
+                blocked_long_term += 1
+                print("SKIP: long-term futures market.")
+                print("Question:", question)
+                continue
+
+            if not any(word in market_text for word in ALLOW_GAME_WORDS):
+                print("SKIP: not a single-game/match market.")
+                print("Question:", question)
+                continue
+
+            game_style_matches += 1
+
             outcomes_raw = market.get("outcomes")
             prices_raw = market.get("outcomePrices")
 
@@ -181,7 +198,7 @@ try:
                 continue
 
             if len(outcomes) != 2 or len(prices) != 2:
-                print("SKIP: not a 2-outcome market")
+                print("SKIP: not a 2-outcome market.")
                 print("Question:", question)
                 print("Market Type:", market_type)
                 continue
@@ -337,13 +354,15 @@ try:
         print("----------------------")
         print("Total active markets seen:", total_markets_seen)
         print("Keyword matches:", keyword_matches)
+        print("Blocked long-term/futures markets:", blocked_long_term)
+        print("Game/match style matches:", game_style_matches)
         print("Two-outcome matches:", two_outcome_matches)
         print("Tradable markets found:", found)
         print("Open paper positions:", len(paper_positions))
         print("Completed / blocked markets:", len(completed_markets))
 
         if found == 0:
-            print("No tradable NBA/NHL/Tennis/Esports 2-outcome markets found right now.")
+            print("No fast NBA/NHL/Tennis/Esports/FIFA 2-outcome markets found right now.")
 
         print(f"Waiting {CHECK_SECONDS} seconds...")
         time.sleep(CHECK_SECONDS)
