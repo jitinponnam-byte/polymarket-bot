@@ -8,15 +8,26 @@ from datetime import datetime
 
 client = PolymarketUS()
 
+# Sports/esports to watch
 SEARCH_WORDS = [
     "nba",
     "nhl",
-    "san antonio",
-    "oklahoma city",
-    "colorado avalanche",
-    "vegas golden knights",
-    "carolina hurricanes",
-    "montreal canadiens"
+    "tennis",
+    "atp",
+    "wta",
+    "valorant",
+    "vct",
+    "counter-strike",
+    "cs2",
+    "csgo",
+    "league of legends",
+    "lol",
+    "dota",
+    "dota 2",
+    "call of duty",
+    "cod",
+    "overwatch",
+    "rocket league"
 ]
 
 CHECK_SECONDS = 60
@@ -25,12 +36,17 @@ PRICE_MOVE_ALERT = 2.0
 # Paper trading only
 PAPER_TRADING = True
 
-# New rules
+# Bot rules
 MAX_OPEN_POSITIONS = 10
 MIN_FAKE_TRADE_AMOUNT = 2.00
 MAX_FAKE_TRADE_AMOUNT = 3.00
-UNDERDOG_MAX_PRICE = 0.50      # only buy losing side under 50%
-PROFIT_TARGET_DOLLARS = 0.25   # cash out when fake profit is at least $0.25
+
+# Buy only underdog/losing side in this range
+UNDERDOG_MIN_PRICE = 0.25
+UNDERDOG_MAX_PRICE = 0.45
+
+# Cash out when fake profit reaches this amount
+PROFIT_TARGET_DOLLARS = 0.25
 
 PRICE_LOG_FILE = "price_log.csv"
 TRADE_LOG_FILE = "paper_trades.csv"
@@ -117,13 +133,15 @@ def get_underdog(outcomes, prices):
     if not valid:
         return None, None
 
-    # Lowest price = losing side / underdog
     return min(valid, key=lambda x: x[1])
 
 
 setup_csv_files()
-print("CSV logging enabled: price_log.csv and paper_trades.csv")
-print("Bot rule: max 10 open positions, $2-$3 fake trade, underdog only, cash out in profit, no re-entry.")
+
+print("CSV logging enabled.")
+print("Watching NBA, NHL, Tennis, and Esports.")
+print("Paper trading only.")
+print("Rules: max 10 positions, $2-$3 each, underdog only, cash out in profit, no re-entry.")
 
 try:
     while True:
@@ -170,7 +188,6 @@ try:
             print("Slug:", slug)
             print("Market Type:", market_type)
 
-            # Log prices and update existing positions
             for outcome, price in zip(outcomes, prices):
                 try:
                     price_float = float(price)
@@ -205,7 +222,6 @@ try:
 
                 last_prices[key] = probability
 
-                # Check if we already have this paper position
                 if key in paper_positions:
                     position = paper_positions[key]
                     buy_price = position["buy_price"]
@@ -234,7 +250,6 @@ try:
                         profit_loss
                     )
 
-                    # Cash out if profitable
                     if profit_loss >= PROFIT_TARGET_DOLLARS:
                         print("PAPER CASH OUT:")
                         print(f"  Sold fake position on {outcome}")
@@ -257,7 +272,6 @@ try:
                         del paper_positions[key]
                         completed_markets.add(slug)
 
-            # Entry logic: only enter once per market
             if PAPER_TRADING:
                 if slug in completed_markets:
                     print("SKIP: already completed this market before.")
@@ -267,7 +281,6 @@ try:
                     print("SKIP: max open paper positions reached.")
                     continue
 
-                # Do not enter if already holding any side of this same market
                 already_in_market = any(pos["slug"] == slug for pos in paper_positions.values())
                 if already_in_market:
                     print("SKIP: already holding a position in this market.")
@@ -278,8 +291,8 @@ try:
                 if underdog_outcome is None:
                     continue
 
-                if underdog_price > UNDERDOG_MAX_PRICE:
-                    print("SKIP: underdog price is not low enough.")
+                if not (UNDERDOG_MIN_PRICE <= underdog_price <= UNDERDOG_MAX_PRICE):
+                    print("SKIP: underdog price outside target range.")
                     continue
 
                 stake = round(random.uniform(MIN_FAKE_TRADE_AMOUNT, MAX_FAKE_TRADE_AMOUNT), 2)
@@ -319,7 +332,7 @@ try:
         print("Completed / blocked markets:", len(completed_markets))
 
         if found == 0:
-            print("No matching NBA/NHL moneyline markets found right now.")
+            print("No matching NBA/NHL/Tennis/Esports moneyline markets found right now.")
 
         print(f"Waiting {CHECK_SECONDS} seconds...")
         time.sleep(CHECK_SECONDS)
