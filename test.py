@@ -3,11 +3,11 @@ import json
 import time
 import csv
 import os
+import random
 from datetime import datetime
 
 client = PolymarketUS()
 
-# Markets to watch
 SEARCH_WORDS = [
     "nba",
     "nhl",
@@ -22,16 +22,22 @@ SEARCH_WORDS = [
 CHECK_SECONDS = 60
 PRICE_MOVE_ALERT = 2.0
 
-# Paper trading only — this does NOT use real money
+# Paper trading only
 PAPER_TRADING = True
-FAKE_BUY_PRICE_LIMIT = 0.60
-FAKE_TRADE_AMOUNT = 10.00
+
+# New rules
+MAX_OPEN_POSITIONS = 10
+MIN_FAKE_TRADE_AMOUNT = 2.00
+MAX_FAKE_TRADE_AMOUNT = 3.00
+UNDERDOG_MAX_PRICE = 0.50      # only buy losing side under 50%
+PROFIT_TARGET_DOLLARS = 0.25   # cash out when fake profit is at least $0.25
 
 PRICE_LOG_FILE = "price_log.csv"
 TRADE_LOG_FILE = "paper_trades.csv"
 
 last_prices = {}
 paper_positions = {}
+completed_markets = set()
 
 
 def setup_csv_files():
@@ -96,8 +102,28 @@ def log_trade(timestamp, action, question, slug, outcome, buy_price, current_pri
         ])
 
 
+def get_underdog(outcomes, prices):
+    valid = []
+
+    for outcome, price in zip(outcomes, prices):
+        try:
+            price_float = float(price)
+        except:
+            continue
+
+        if price_float > 0:
+            valid.append((outcome, price_float))
+
+    if not valid:
+        return None, None
+
+    # Lowest price = losing side / underdog
+    return min(valid, key=lambda x: x[1])
+
+
 setup_csv_files()
 print("CSV logging enabled: price_log.csv and paper_trades.csv")
+print("Bot rule: max 10 open positions, $2-$3 fake trade, underdog only, cash out in profit, no re-entry.")
 
 try:
     while True:
@@ -122,12 +148,9 @@ try:
             market_type = market.get("marketType", "")
             market_text = f"{question} {slug}".lower()
 
-            # Only check markets matching our search words
             if not any(word.lower() in market_text for word in SEARCH_WORDS):
                 continue
 
-            # Only focus on game winner markets
-            # This skips long-term futures like "NBA Champion"
             if market_type != "moneyline":
                 continue
 
@@ -140,11 +163,14 @@ try:
             except:
                 continue
 
+            found += 1
+
             print("----------------------")
             print("Question:", question)
             print("Slug:", slug)
             print("Market Type:", market_type)
 
+            # Log prices and update existing positions
             for outcome, price in zip(outcomes, prices):
                 try:
                     price_float = float(price)
@@ -153,7 +179,6 @@ try:
                     continue
 
                 if price_float <= 0:
-                    print(f"{outcome}: {probability:.1f}% -- skipped, price too low/invalid")
                     continue
 
                 key = f"{slug}:{outcome}"
@@ -161,7 +186,6 @@ try:
 
                 print(f"{outcome}: {probability:.1f}%")
 
-                # Save every price check to CSV
                 log_price(
                     timestamp,
                     question,
@@ -172,7 +196,6 @@ try:
                     probability
                 )
 
-                # Alert if price moved enough
                 if old_probability is not None:
                     change = probability - old_probability
 
@@ -182,40 +205,7 @@ try:
 
                 last_prices[key] = probability
 
-                # PAPER TRADE RULE:
-                # Fake buy any outcome when price is below 35%
-                # This does NOT place a real order.
-                if PAPER_TRADING and price_float <= FAKE_BUY_PRICE_LIMIT:
-                    if key not in paper_positions:
-                        shares = FAKE_TRADE_AMOUNT / price_float
-
-                        paper_positions[key] = {
-                            "question": question,
-                            "slug": slug,
-                            "outcome": outcome,
-                            "buy_price": price_float,
-                            "shares": shares,
-                            "amount": FAKE_TRADE_AMOUNT
-                        }
-
-                        print("PAPER BUY:")
-                        print(f"  Bought fake ${FAKE_TRADE_AMOUNT:.2f} of {outcome} at {probability:.1f}%")
-                        print(f"  Fake shares: {shares:.2f}")
-
-                        log_trade(
-                            timestamp,
-                            "PAPER_BUY",
-                            question,
-                            slug,
-                            outcome,
-                            price_float,
-                            price_float,
-                            shares,
-                            FAKE_TRADE_AMOUNT,
-                            0.00
-                        )
-
-                # Show fake profit/loss if we have a paper position
+                # Check if we already have this paper position
                 if key in paper_positions:
                     position = paper_positions[key]
                     buy_price = position["buy_price"]
@@ -226,6 +216,7 @@ try:
                     profit_loss = current_value - amount
 
                     print("PAPER POSITION:")
+                    print(f"  Side: {outcome}")
                     print(f"  Bought at: {buy_price * 100:.1f}%")
                     print(f"  Current: {probability:.1f}%")
                     print(f"  Fake P/L: ${profit_loss:.2f}")
@@ -243,17 +234,94 @@ try:
                         profit_loss
                     )
 
-            found += 1
+                    # Cash out if profitable
+                    if profit_loss >= PROFIT_TARGET_DOLLARS:
+                        print("PAPER CASH OUT:")
+                        print(f"  Sold fake position on {outcome}")
+                        print(f"  Fake profit: ${profit_loss:.2f}")
+                        print("  This market will not be entered again.")
+
+                        log_trade(
+                            timestamp,
+                            "PAPER_CASH_OUT",
+                            question,
+                            slug,
+                            outcome,
+                            buy_price,
+                            price_float,
+                            shares,
+                            amount,
+                            profit_loss
+                        )
+
+                        del paper_positions[key]
+                        completed_markets.add(slug)
+
+            # Entry logic: only enter once per market
+            if PAPER_TRADING:
+                if slug in completed_markets:
+                    print("SKIP: already completed this market before.")
+                    continue
+
+                if len(paper_positions) >= MAX_OPEN_POSITIONS:
+                    print("SKIP: max open paper positions reached.")
+                    continue
+
+                # Do not enter if already holding any side of this same market
+                already_in_market = any(pos["slug"] == slug for pos in paper_positions.values())
+                if already_in_market:
+                    print("SKIP: already holding a position in this market.")
+                    continue
+
+                underdog_outcome, underdog_price = get_underdog(outcomes, prices)
+
+                if underdog_outcome is None:
+                    continue
+
+                if underdog_price > UNDERDOG_MAX_PRICE:
+                    print("SKIP: underdog price is not low enough.")
+                    continue
+
+                stake = round(random.uniform(MIN_FAKE_TRADE_AMOUNT, MAX_FAKE_TRADE_AMOUNT), 2)
+                shares = stake / underdog_price
+                key = f"{slug}:{underdog_outcome}"
+
+                paper_positions[key] = {
+                    "question": question,
+                    "slug": slug,
+                    "outcome": underdog_outcome,
+                    "buy_price": underdog_price,
+                    "shares": shares,
+                    "amount": stake
+                }
+
+                print("PAPER BUY:")
+                print(f"  Bought fake ${stake:.2f} of {underdog_outcome}")
+                print(f"  Entry price: {underdog_price * 100:.1f}%")
+                print(f"  Fake shares: {shares:.2f}")
+
+                log_trade(
+                    timestamp,
+                    "PAPER_BUY",
+                    question,
+                    slug,
+                    underdog_outcome,
+                    underdog_price,
+                    underdog_price,
+                    shares,
+                    stake,
+                    0.00
+                )
 
         print("----------------------")
         print("Markets found:", found)
-        print("Paper positions:", len(paper_positions))
+        print("Open paper positions:", len(paper_positions))
+        print("Completed / blocked markets:", len(completed_markets))
 
         if found == 0:
             print("No matching NBA/NHL moneyline markets found right now.")
 
         print(f"Waiting {CHECK_SECONDS} seconds...")
-
         time.sleep(CHECK_SECONDS)
 
 except KeyboardInterrupt:
