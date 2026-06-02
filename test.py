@@ -8,7 +8,6 @@ from datetime import datetime
 
 client = PolymarketUS()
 
-# Sports/esports to watch
 SEARCH_WORDS = [
     "nba",
     "nhl",
@@ -33,19 +32,15 @@ SEARCH_WORDS = [
 CHECK_SECONDS = 60
 PRICE_MOVE_ALERT = 2.0
 
-# Paper trading only
 PAPER_TRADING = True
 
-# Bot rules
 MAX_OPEN_POSITIONS = 10
 MIN_FAKE_TRADE_AMOUNT = 2.00
 MAX_FAKE_TRADE_AMOUNT = 3.00
 
-# Buy only underdog/losing side in this range
 UNDERDOG_MIN_PRICE = 0.25
 UNDERDOG_MAX_PRICE = 0.45
 
-# Cash out when fake profit reaches this amount
 PROFIT_TARGET_DOLLARS = 0.25
 
 PRICE_LOG_FILE = "price_log.csv"
@@ -130,7 +125,7 @@ def get_underdog(outcomes, prices):
         if price_float > 0:
             valid.append((outcome, price_float))
 
-    if not valid:
+    if len(valid) != 2:
         return None, None
 
     return min(valid, key=lambda x: x[1])
@@ -142,6 +137,7 @@ print("CSV logging enabled.")
 print("Watching NBA, NHL, Tennis, and Esports.")
 print("Paper trading only.")
 print("Rules: max 10 positions, $2-$3 each, underdog only, cash out in profit, no re-entry.")
+print("Updated: moneyline-only filter removed. Bot now accepts any 2-outcome matching market.")
 
 try:
     while True:
@@ -158,19 +154,22 @@ try:
         })
 
         markets = markets_data.get("markets", [])
+
+        total_markets_seen = len(markets)
+        keyword_matches = 0
+        two_outcome_matches = 0
         found = 0
 
         for market in markets:
             question = market.get("question", "")
             slug = market.get("slug", "")
-            market_type = market.get("marketType", "")
-            market_text = f"{question} {slug}".lower()
+            market_type = market.get("marketType", "unknown")
+            market_text = f"{question} {slug} {market_type}".lower()
 
             if not any(word.lower() in market_text for word in SEARCH_WORDS):
                 continue
 
-            if market_type != "moneyline":
-                continue
+            keyword_matches += 1
 
             outcomes_raw = market.get("outcomes")
             prices_raw = market.get("outcomePrices")
@@ -181,6 +180,13 @@ try:
             except:
                 continue
 
+            if len(outcomes) != 2 or len(prices) != 2:
+                print("SKIP: not a 2-outcome market")
+                print("Question:", question)
+                print("Market Type:", market_type)
+                continue
+
+            two_outcome_matches += 1
             found += 1
 
             print("----------------------")
@@ -233,8 +239,10 @@ try:
 
                     print("PAPER POSITION:")
                     print(f"  Side: {outcome}")
+                    print(f"  Amount in: ${amount:.2f}")
                     print(f"  Bought at: {buy_price * 100:.1f}%")
                     print(f"  Current: {probability:.1f}%")
+                    print(f"  Current value: ${current_value:.2f}")
                     print(f"  Fake P/L: ${profit_loss:.2f}")
 
                     log_trade(
@@ -327,12 +335,15 @@ try:
                 )
 
         print("----------------------")
-        print("Markets found:", found)
+        print("Total active markets seen:", total_markets_seen)
+        print("Keyword matches:", keyword_matches)
+        print("Two-outcome matches:", two_outcome_matches)
+        print("Tradable markets found:", found)
         print("Open paper positions:", len(paper_positions))
         print("Completed / blocked markets:", len(completed_markets))
 
         if found == 0:
-            print("No matching NBA/NHL/Tennis/Esports moneyline markets found right now.")
+            print("No tradable NBA/NHL/Tennis/Esports 2-outcome markets found right now.")
 
         print(f"Waiting {CHECK_SECONDS} seconds...")
         time.sleep(CHECK_SECONDS)
