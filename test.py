@@ -4,9 +4,14 @@ import time
 import csv
 import os
 import random
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 
 client = PolymarketUS()
+
+# ==============================
+# SEARCH SETTINGS
+# ==============================
 
 SEARCH_WORDS = [
     "nba", "nhl",
@@ -18,14 +23,16 @@ SEARCH_WORDS = [
     "call of duty", "cod",
     "overwatch",
     "rocket league",
-    "fifa", "world cup", "soccer"
+    "fifa", "soccer", "mls"
 ]
 
+# Blocks long-term markets / futures / awards / season markets
 BLOCK_WORDS = [
     "mvp",
     "champion",
     "championship",
     "winner",
+    "golden boot",
     "rookie of the year",
     "hart",
     "stanley cup",
@@ -35,9 +42,29 @@ BLOCK_WORDS = [
     "award",
     "league winner",
     "conference winner",
-    "division winner"
+    "division winner",
+    "group winner",
+    "group a winner",
+    "group b winner",
+    "group c winner",
+    "group d winner",
+    "group e winner",
+    "group f winner",
+    "group g winner",
+    "group h winner",
+    "group i winner",
+    "group j winner",
+    "group k winner",
+    "group l winner",
+    "major league soccer champion",
+    "mls champion",
+    "world cup winner",
+    "fifa world cup winner",
+    "fifa world cup golden boot",
+    "fifa world cup group"
 ]
 
+# Only allow markets that look like one game or one match
 ALLOW_GAME_WORDS = [
     " vs ",
     " against ",
@@ -45,6 +72,15 @@ ALLOW_GAME_WORDS = [
     "game",
     "scheduled for"
 ]
+
+# Short-term market rule
+# If a market has a date like "scheduled for Jun 17, 2026",
+# bot will only allow it if it is within this many days.
+MAX_DAYS_AHEAD = 7
+
+# ==============================
+# BOT SETTINGS
+# ==============================
 
 CHECK_SECONDS = 60
 PRICE_MOVE_ALERT = 2.0
@@ -58,12 +94,23 @@ MAX_FAKE_TRADE_AMOUNT = 3.00
 UNDERDOG_MIN_PRICE = 0.25
 UNDERDOG_MAX_PRICE = 0.45
 
-# NEW SELL LOGIC
-# Bot will not sell immediately at small profit.
-# It tracks the highest price after buying and sells only after price drops from that high.
-MIN_PEAK_PROFIT_TO_TRAIL = 0.10      # Must be up at least $0.10 before trailing sell is allowed
-TRAILING_DROP_FROM_HIGH = 0.02      # Sell if price drops 2 cents from highest price
-HARD_STOP_LOSS_DOLLARS = 0.75       # Sell if fake loss reaches -$0.75
+# ==============================
+# TRAILING SELL SETTINGS
+# ==============================
+
+# Must be up at least this much before trailing sell is allowed
+MIN_PEAK_PROFIT_TO_TRAIL = 0.10
+
+# Sell if price drops this much from the highest price after buy
+# 0.02 = 2 cents / 2 percentage points
+TRAILING_DROP_FROM_HIGH = 0.02
+
+# Emergency stop loss
+HARD_STOP_LOSS_DOLLARS = 0.75
+
+# ==============================
+# FILES
+# ==============================
 
 PRICE_LOG_FILE = "price_log.csv"
 TRADE_LOG_FILE = "paper_trades.csv"
@@ -128,23 +175,89 @@ def get_underdog(outcomes, prices):
     return min(valid, key=lambda x: x[1])
 
 
-def is_fast_game_market(market_text):
-    if any(word in market_text for word in BLOCK_WORDS):
+def has_blocked_words(market_text):
+    return any(word in market_text for word in BLOCK_WORDS)
+
+
+def looks_like_game_market(market_text):
+    return any(word in market_text for word in ALLOW_GAME_WORDS)
+
+
+def parse_scheduled_date(market_text):
+    """
+    Looks for dates like:
+    scheduled for Jun 17, 2026
+    scheduled for June 17, 2026
+    """
+
+    pattern = r"scheduled for ([a-zA-Z]+)\s+(\d{1,2}),\s*(\d{4})"
+    match = re.search(pattern, market_text)
+
+    if not match:
+        return None
+
+    month_name = match.group(1)
+    day = match.group(2)
+    year = match.group(3)
+
+    date_string = f"{month_name} {day}, {year}"
+
+    for fmt in ["%b %d, %Y", "%B %d, %Y"]:
+        try:
+            return datetime.strptime(date_string, fmt)
+        except:
+            pass
+
+    return None
+
+
+def is_short_term_market(market_text):
+    """
+    Small-term deal filter:
+    - If the market has a scheduled date, only allow it within MAX_DAYS_AHEAD.
+    - If there is no scheduled date, allow only if it still looks like a game/match.
+    """
+
+    scheduled_date = parse_scheduled_date(market_text)
+
+    if scheduled_date is None:
+        return True
+
+    now = datetime.now()
+    latest_allowed = now + timedelta(days=MAX_DAYS_AHEAD)
+
+    if scheduled_date < now - timedelta(days=1):
         return False
 
-    if not any(word in market_text for word in ALLOW_GAME_WORDS):
+    if scheduled_date > latest_allowed:
         return False
 
     return True
 
 
+def is_allowed_small_term_market(question, slug, market_type):
+    market_text = f"{question} {slug} {market_type}".lower()
+
+    if has_blocked_words(market_text):
+        return False, "long-term futures / award / winner market"
+
+    if not looks_like_game_market(market_text):
+        return False, "not a single-game or match market"
+
+    if not is_short_term_market(market_text):
+        return False, f"market is too far away; only allowing next {MAX_DAYS_AHEAD} days"
+
+    return True, "allowed"
+
+
 setup_csv_files()
 
 print("CSV logging enabled.")
-print("Watching NBA, NHL, Tennis, Esports, FIFA, and soccer.")
+print("Watching short-term NBA, NHL, Tennis, Esports, FIFA, soccer, and MLS markets.")
 print("Paper trading only.")
+print("Rules: small-term game/match markets only, no champion/winner/futures markets.")
 print("Rules: max 10 positions, $2-$3 each, underdog only, trailing cash out, no re-entry.")
-print("Updated: holds after buy, tracks high price, sells when price starts dropping from the high.")
+print(f"Short-term filter: only markets within {MAX_DAYS_AHEAD} days when a scheduled date is found.")
 
 try:
     while True:
@@ -165,6 +278,8 @@ try:
         total_markets_seen = len(markets)
         keyword_matches = 0
         blocked_long_term = 0
+        blocked_not_game = 0
+        blocked_too_far = 0
         game_style_matches = 0
         two_outcome_matches = 0
         found = 0
@@ -180,14 +295,21 @@ try:
 
             keyword_matches += 1
 
-            if any(word in market_text for word in BLOCK_WORDS):
-                blocked_long_term += 1
-                print("SKIP: long-term futures market.")
-                print("Question:", question)
-                continue
+            allowed, reason = is_allowed_small_term_market(question, slug, market_type)
 
-            if not any(word in market_text for word in ALLOW_GAME_WORDS):
-                print("SKIP: not a single-game/match market.")
+            if not allowed:
+                if "long-term" in reason:
+                    blocked_long_term += 1
+                    print("SKIP: long-term futures/award/winner market.")
+                elif "not a single-game" in reason:
+                    blocked_not_game += 1
+                    print("SKIP: not a single-game/match market.")
+                elif "too far" in reason:
+                    blocked_too_far += 1
+                    print("SKIP: market too far away.")
+                else:
+                    print("SKIP:", reason)
+
                 print("Question:", question)
                 continue
 
@@ -259,7 +381,6 @@ try:
                     current_value = shares * price_float
                     profit_loss = current_value - amount
 
-                    # Update highest price after buy
                     highest_price = position.get("highest_price", buy_price)
 
                     if price_float > highest_price:
@@ -296,11 +417,9 @@ try:
                         profit_loss
                     )
 
-                    # Sell only after price went up enough, then dropped from the high
                     trailing_sell_ready = peak_profit_loss >= MIN_PEAK_PROFIT_TO_TRAIL
                     price_fell_from_peak = drop_from_high >= TRAILING_DROP_FROM_HIGH
 
-                    # Emergency stop loss
                     hard_stop_hit = (
                         HARD_STOP_LOSS_DOLLARS is not None
                         and profit_loss <= -HARD_STOP_LOSS_DOLLARS
@@ -414,14 +533,16 @@ try:
         print("Total active markets seen:", total_markets_seen)
         print("Keyword matches:", keyword_matches)
         print("Blocked long-term/futures markets:", blocked_long_term)
+        print("Blocked non-game markets:", blocked_not_game)
+        print("Blocked markets too far away:", blocked_too_far)
         print("Game/match style matches:", game_style_matches)
         print("Two-outcome matches:", two_outcome_matches)
-        print("Tradable markets found:", found)
+        print("Tradable small-term markets found:", found)
         print("Open paper positions:", len(paper_positions))
         print("Completed / blocked markets:", len(completed_markets))
 
         if found == 0:
-            print("No fast NBA/NHL/Tennis/Esports/FIFA 2-outcome markets found right now.")
+            print("No short-term 2-outcome game/match markets found right now.")
 
         print(f"Waiting {CHECK_SECONDS} seconds...")
         time.sleep(CHECK_SECONDS)
