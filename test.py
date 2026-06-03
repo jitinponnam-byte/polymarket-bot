@@ -58,7 +58,12 @@ MAX_FAKE_TRADE_AMOUNT = 3.00
 UNDERDOG_MIN_PRICE = 0.25
 UNDERDOG_MAX_PRICE = 0.45
 
-PROFIT_TARGET_DOLLARS = 0.25
+# NEW SELL LOGIC
+# Bot will not sell immediately at small profit.
+# It tracks the highest price after buying and sells only after price drops from that high.
+MIN_PEAK_PROFIT_TO_TRAIL = 0.10      # Must be up at least $0.10 before trailing sell is allowed
+TRAILING_DROP_FROM_HIGH = 0.02      # Sell if price drops 2 cents from highest price
+HARD_STOP_LOSS_DOLLARS = 0.75       # Sell if fake loss reaches -$0.75
 
 PRICE_LOG_FILE = "price_log.csv"
 TRADE_LOG_FILE = "paper_trades.csv"
@@ -138,8 +143,8 @@ setup_csv_files()
 print("CSV logging enabled.")
 print("Watching NBA, NHL, Tennis, Esports, FIFA, and soccer.")
 print("Paper trading only.")
-print("Rules: max 10 positions, $2-$3 each, underdog only, cash out in profit, no re-entry.")
-print("Updated: filters out futures/long-term markets and focuses on same-day style games/matches.")
+print("Rules: max 10 positions, $2-$3 each, underdog only, trailing cash out, no re-entry.")
+print("Updated: holds after buy, tracks high price, sells when price starts dropping from the high.")
 
 try:
     while True:
@@ -254,6 +259,19 @@ try:
                     current_value = shares * price_float
                     profit_loss = current_value - amount
 
+                    # Update highest price after buy
+                    highest_price = position.get("highest_price", buy_price)
+
+                    if price_float > highest_price:
+                        highest_price = price_float
+                        position["highest_price"] = highest_price
+                        position["highest_value"] = shares * highest_price
+                        position["peak_profit_loss"] = position["highest_value"] - amount
+
+                    highest_value = position.get("highest_value", shares * highest_price)
+                    peak_profit_loss = position.get("peak_profit_loss", highest_value - amount)
+                    drop_from_high = highest_price - price_float
+
                     print("PAPER POSITION:")
                     print(f"  Side: {outcome}")
                     print(f"  Amount in: ${amount:.2f}")
@@ -261,6 +279,9 @@ try:
                     print(f"  Current: {probability:.1f}%")
                     print(f"  Current value: ${current_value:.2f}")
                     print(f"  Fake P/L: ${profit_loss:.2f}")
+                    print(f"  High since buy: {highest_price * 100:.1f}%")
+                    print(f"  Drop from high: {drop_from_high * 100:.1f} percentage points")
+                    print(f"  Peak fake P/L: ${peak_profit_loss:.2f}")
 
                     log_trade(
                         timestamp,
@@ -275,15 +296,50 @@ try:
                         profit_loss
                     )
 
-                    if profit_loss >= PROFIT_TARGET_DOLLARS:
-                        print("PAPER CASH OUT:")
+                    # Sell only after price went up enough, then dropped from the high
+                    trailing_sell_ready = peak_profit_loss >= MIN_PEAK_PROFIT_TO_TRAIL
+                    price_fell_from_peak = drop_from_high >= TRAILING_DROP_FROM_HIGH
+
+                    # Emergency stop loss
+                    hard_stop_hit = (
+                        HARD_STOP_LOSS_DOLLARS is not None
+                        and profit_loss <= -HARD_STOP_LOSS_DOLLARS
+                    )
+
+                    if trailing_sell_ready and price_fell_from_peak:
+                        print("PAPER TRAILING CASH OUT:")
                         print(f"  Sold fake position on {outcome}")
-                        print(f"  Fake profit: ${profit_loss:.2f}")
+                        print(f"  Peak fake profit was: ${peak_profit_loss:.2f}")
+                        print(f"  Final fake P/L: ${profit_loss:.2f}")
+                        print("  Reason: price started going down after reaching a high.")
                         print("  This market will not be entered again.")
 
                         log_trade(
                             timestamp,
-                            "PAPER_CASH_OUT",
+                            "PAPER_TRAILING_CASH_OUT",
+                            question,
+                            slug,
+                            outcome,
+                            buy_price,
+                            price_float,
+                            shares,
+                            amount,
+                            profit_loss
+                        )
+
+                        del paper_positions[key]
+                        completed_markets.add(slug)
+
+                    elif hard_stop_hit:
+                        print("PAPER STOP LOSS:")
+                        print(f"  Sold fake position on {outcome}")
+                        print(f"  Final fake P/L: ${profit_loss:.2f}")
+                        print("  Reason: hard stop loss hit.")
+                        print("  This market will not be entered again.")
+
+                        log_trade(
+                            timestamp,
+                            "PAPER_STOP_LOSS",
                             question,
                             slug,
                             outcome,
@@ -330,7 +386,10 @@ try:
                     "outcome": underdog_outcome,
                     "buy_price": underdog_price,
                     "shares": shares,
-                    "amount": stake
+                    "amount": stake,
+                    "highest_price": underdog_price,
+                    "highest_value": stake,
+                    "peak_profit_loss": 0.00
                 }
 
                 print("PAPER BUY:")
