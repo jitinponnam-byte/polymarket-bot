@@ -73,10 +73,14 @@ ALLOW_GAME_WORDS = [
     "scheduled for"
 ]
 
-# Short-term market rule
-# If a market has a date like "scheduled for Jun 17, 2026",
-# bot will only allow it if it is within this many days.
-MAX_DAYS_AHEAD = 7
+# ==============================
+# SAME-DAY RULE
+# ==============================
+
+# Same-day only.
+# If the market has a date like "scheduled for Jun 17, 2026",
+# the bot only allows it if that date is today.
+SAME_DAY_ONLY = True
 
 # ==============================
 # BOT SETTINGS
@@ -211,11 +215,11 @@ def parse_scheduled_date(market_text):
     return None
 
 
-def is_short_term_market(market_text):
+def is_same_day_market(market_text):
     """
-    Small-term deal filter:
-    - If the market has a scheduled date, only allow it within MAX_DAYS_AHEAD.
-    - If there is no scheduled date, allow only if it still looks like a game/match.
+    Same-day only filter:
+    - If the market has a scheduled date, only allow it if it is today.
+    - If there is no scheduled date, allow it only if it still looks like a game/match.
     """
 
     scheduled_date = parse_scheduled_date(market_text)
@@ -223,13 +227,9 @@ def is_short_term_market(market_text):
     if scheduled_date is None:
         return True
 
-    now = datetime.now()
-    latest_allowed = now + timedelta(days=MAX_DAYS_AHEAD)
+    today = datetime.now().date()
 
-    if scheduled_date < now - timedelta(days=1):
-        return False
-
-    if scheduled_date > latest_allowed:
+    if scheduled_date.date() != today:
         return False
 
     return True
@@ -244,8 +244,8 @@ def is_allowed_small_term_market(question, slug, market_type):
     if not looks_like_game_market(market_text):
         return False, "not a single-game or match market"
 
-    if not is_short_term_market(market_text):
-        return False, f"market is too far away; only allowing next {MAX_DAYS_AHEAD} days"
+    if SAME_DAY_ONLY and not is_same_day_market(market_text):
+        return False, "not a same-day market"
 
     return True, "allowed"
 
@@ -253,11 +253,11 @@ def is_allowed_small_term_market(question, slug, market_type):
 setup_csv_files()
 
 print("CSV logging enabled.")
-print("Watching short-term NBA, NHL, Tennis, Esports, FIFA, soccer, and MLS markets.")
+print("Watching same-day NBA, NHL, Tennis, Esports, FIFA, soccer, and MLS markets.")
 print("Paper trading only.")
-print("Rules: small-term game/match markets only, no champion/winner/futures markets.")
+print("Rules: SAME-DAY game/match markets only, no champion/winner/futures markets.")
 print("Rules: max 10 positions, $2-$3 each, underdog only, trailing cash out, no re-entry.")
-print(f"Short-term filter: only markets within {MAX_DAYS_AHEAD} days when a scheduled date is found.")
+print("Short-term filter: same-day markets only when a scheduled date is found.")
 
 try:
     while True:
@@ -279,7 +279,7 @@ try:
         keyword_matches = 0
         blocked_long_term = 0
         blocked_not_game = 0
-        blocked_too_far = 0
+        blocked_not_same_day = 0
         game_style_matches = 0
         two_outcome_matches = 0
         found = 0
@@ -304,9 +304,9 @@ try:
                 elif "not a single-game" in reason:
                     blocked_not_game += 1
                     print("SKIP: not a single-game/match market.")
-                elif "too far" in reason:
-                    blocked_too_far += 1
-                    print("SKIP: market too far away.")
+                elif "same-day" in reason:
+                    blocked_not_same_day += 1
+                    print("SKIP: not a same-day market.")
                 else:
                     print("SKIP:", reason)
 
@@ -534,15 +534,15 @@ try:
         print("Keyword matches:", keyword_matches)
         print("Blocked long-term/futures markets:", blocked_long_term)
         print("Blocked non-game markets:", blocked_not_game)
-        print("Blocked markets too far away:", blocked_too_far)
+        print("Blocked not-same-day markets:", blocked_not_same_day)
         print("Game/match style matches:", game_style_matches)
         print("Two-outcome matches:", two_outcome_matches)
-        print("Tradable small-term markets found:", found)
+        print("Tradable same-day markets found:", found)
         print("Open paper positions:", len(paper_positions))
         print("Completed / blocked markets:", len(completed_markets))
 
         if found == 0:
-            print("No short-term 2-outcome game/match markets found right now.")
+            print("No same-day 2-outcome game/match markets found right now.")
 
         print(f"Waiting {CHECK_SECONDS} seconds...")
         time.sleep(CHECK_SECONDS)
